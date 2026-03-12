@@ -59,7 +59,7 @@ public class GetDashTranscodeDecisionCommandHandler
             {
                 ConnectionUrl = connectionResult.Value.Url,
                 Timeout = 30,
-                RetryCount = 3,
+                RetryCount = 1,
             }
         );
 
@@ -81,11 +81,12 @@ public class GetDashTranscodeDecisionCommandHandler
         if (mediaContainer is null)
             return Result.Fail("Invalid decision response: missing MediaContainer").LogError();
 
-        _log.Here().Debug("{@MediaContainer}", mediaContainer.ToString());
         var summary = new GetDashTranscodeDecisionResult
         {
             GeneralDecisionCode = mediaContainer.GeneralDecisionCode?.ToString() ?? "unknown",
             GeneralDecisionText = mediaContainer.GeneralDecisionText ?? "unknown",
+            DirectPlayDecisionCode = mediaContainer.DirectPlayDecisionCode?.ToString() ?? "unknown",
+            DirectPlayDecisionText = mediaContainer.DirectPlayDecisionText ?? "unknown",
             TranscodeDecisionCode = mediaContainer.TranscodeDecisionCode?.ToString() ?? "unknown",
             TranscodeDecisionText = mediaContainer.TranscodeDecisionText ?? "unknown",
             VideoDecision = "unknown",

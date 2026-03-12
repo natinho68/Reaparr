@@ -65,7 +65,11 @@ public class DirectPlexDownloadClient : IPlexDownloadClient
     }
 
     /// <inheritdoc/>
-    public async Task<Result> Start(DownloadTaskKey downloadTaskKey, CancellationToken cancellationToken = default)
+    public async Task<Result> Start(
+        DownloadTaskKey downloadTaskKey,
+        CancellationToken cancellationToken = default,
+        PlexDownloadSource? source = null
+    )
     {
         _downloadTaskKey = downloadTaskKey;
         var downloadTask = await _dbContext.GetDownloadTaskFileAsync(downloadTaskKey, cancellationToken);
@@ -76,15 +80,19 @@ public class DirectPlexDownloadClient : IPlexDownloadClient
                 .LogWarning();
         }
 
-        var downloadUrlResult = await _commandExecutor.Send(
-            new GetDirectDownloadUrlCommand(downloadTask.PlexServerId, downloadTask.FileLocationUrl),
-            cancellationToken
-        );
+        var downloadUrl = source?.DownloadUrl;
+        if (string.IsNullOrWhiteSpace(downloadUrl))
+        {
+            var downloadUrlResult = await _commandExecutor.Send(
+                new GetDirectDownloadUrlCommand(downloadTask.PlexServerId, downloadTask.FileLocationUrl),
+                cancellationToken
+            );
 
-        if (downloadUrlResult.IsFailed)
-            return downloadUrlResult.ToResult();
+            if (downloadUrlResult.IsFailed)
+                return downloadUrlResult.ToResult();
 
-        var downloadUrl = downloadUrlResult.Value;
+            downloadUrl = downloadUrlResult.Value;
+        }
 
         // Prepare destination stream
         // TODO this should be replaced with just making and ensuring the destination path exist, doesn't need a stream

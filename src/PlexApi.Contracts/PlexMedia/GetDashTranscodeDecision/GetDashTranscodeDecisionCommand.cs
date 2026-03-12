@@ -12,6 +12,10 @@ public record GetDashTranscodeDecisionResult
 
     public required string GeneralDecisionText { get; init; }
 
+    public required string DirectPlayDecisionCode { get; init; }
+
+    public required string DirectPlayDecisionText { get; init; }
+
     public required string TranscodeDecisionCode { get; init; }
 
     public required string TranscodeDecisionText { get; init; }

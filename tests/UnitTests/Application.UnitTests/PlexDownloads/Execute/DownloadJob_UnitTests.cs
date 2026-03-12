@@ -1,10 +1,12 @@
 using System.Text.Json;
 using Autofac;
 using Autofac.Features.Indexed;
+using FastEndpoints;
 using Microsoft.EntityFrameworkCore;
 using Quartz;
 using Reaparr.Application.Contracts;
 using Reaparr.Data.Contracts;
+using Reaparr.PlexApi.Contracts;
 using Reaparr.Settings.Contracts;
 
 namespace Reaparr.Application.UnitTests;
@@ -34,8 +36,21 @@ public class DownloadJobUnitTests : BaseUnitTest<DownloadJob>
         Mock.Mock<IJobExecutionContext>().SetupGet(x => x.JobDetail.JobDataMap).Returns(new JobDataMap(dict));
         Mock.Mock<IJobExecutionContext>().SetupGet(x => x.CancellationToken).Returns(CancellationToken);
         Mock.Mock<IPlexDownloadClient>()
-            .Setup(x => x.Start(It.IsAny<DownloadTaskKey>(), CancellationToken))
+            .Setup(x => x.Start(It.IsAny<DownloadTaskKey>(), CancellationToken, It.IsAny<PlexDownloadSource?>()))
             .ReturnsAsync(Result.Ok());
+        Mock.Mock<ICommandExecutor>()
+            .Setup(x => x.Send(It.IsAny<ICommand<Result<GetTranscodeUrlResult>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+                Result.Ok(
+                    new GetTranscodeUrlResult
+                    {
+                        DownloadUrl = "https://plex.example/file.mp4",
+                        Method = DeliveryMethod.DirectFile,
+                        QualityTier = DeliveryQualityTier.Exact,
+                        TranscodedQuality = VideoQuality.None,
+                    }
+                )
+            );
 
         // Act
         await Sut.Execute(Mock.Create<IJobExecutionContext>());
@@ -77,13 +92,25 @@ public class DownloadJobUnitTests : BaseUnitTest<DownloadJob>
 
         Mock.Mock<IJobExecutionContext>().SetupGet(x => x.JobDetail.JobDataMap).Returns(new JobDataMap(dict));
         Mock.Mock<IJobExecutionContext>().SetupGet(x => x.CancellationToken).Returns(CancellationToken);
-        Mock.Mock<IServerSettingsModule>().Setup(x => x.GetAllowStreamDownloader(It.IsAny<string>())).Returns(false);
-
         var downloadClientMock = Mock.Mock<IPlexDownloadClient>();
         downloadClientMock
-            .Setup(x => x.Start(It.IsAny<DownloadTaskKey>(), CancellationToken))
+            .Setup(x => x.Start(It.IsAny<DownloadTaskKey>(), CancellationToken, It.IsAny<PlexDownloadSource?>()))
             .ReturnsAsync(Result.Ok());
         downloadClientMock.Setup(x => x.DisposeAsync()).Returns(ValueTask.CompletedTask).Verifiable(Times.Once);
+
+        Mock.Mock<ICommandExecutor>()
+            .Setup(x => x.Send(It.IsAny<ICommand<Result<GetTranscodeUrlResult>>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync(
+                Result.Ok(
+                    new GetTranscodeUrlResult
+                    {
+                        DownloadUrl = "https://plex.example/file.mp4",
+                        Method = DeliveryMethod.DirectFile,
+                        QualityTier = DeliveryQualityTier.Exact,
+                        TranscodedQuality = VideoQuality.None,
+                    }
+                )
+            );
 
         var downloadClientIndexMock = new Mock<IIndex<PlexDownloadClientType, IPlexDownloadClient>>();
         downloadClientIndexMock.Setup(x => x[It.IsAny<PlexDownloadClientType>()]).Returns(downloadClientMock.Object);

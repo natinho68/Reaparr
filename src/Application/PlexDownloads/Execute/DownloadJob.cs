@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Quartz;
 using Reaparr.Application.Contracts;
 using Reaparr.Data.Contracts;
-using Reaparr.Settings.Contracts;
+using Reaparr.PlexApi.Contracts;
 
 namespace Reaparr.Application;
 
@@ -16,24 +16,24 @@ public class DownloadJob : IJob
     private readonly IReaparrDbContext _dbContext;
     private readonly IDownloadTaskUpdateDispatcher _downloadTaskUpdateDispatcher;
     private readonly IEventPublisher _eventPublisher;
-    private readonly IServerSettingsModule _serverSettingsModule;
     private readonly IIndex<PlexDownloadClientType, IPlexDownloadClient> _plexDownloadClientFactory;
+    private readonly ICommandExecutor _commandExecutor;
 
     public DownloadJob(
         ILogger log,
         IReaparrDbContext dbContext,
         IDownloadTaskUpdateDispatcher downloadTaskUpdateDispatcher,
         IEventPublisher eventPublisher,
-        IServerSettingsModule serverSettingsModule,
-        IIndex<PlexDownloadClientType, IPlexDownloadClient> plexDownloadClientFactory
+        IIndex<PlexDownloadClientType, IPlexDownloadClient> plexDownloadClientFactory,
+        ICommandExecutor commandExecutor
     )
     {
         _log = log.ForContext<DownloadJob>();
         _dbContext = dbContext;
         _downloadTaskUpdateDispatcher = downloadTaskUpdateDispatcher;
         _eventPublisher = eventPublisher;
-        _serverSettingsModule = serverSettingsModule;
         _plexDownloadClientFactory = plexDownloadClientFactory;
+        _commandExecutor = commandExecutor;
     }
 
     public static string DownloadTaskIdParameter => "DownloadTaskId";
@@ -91,20 +91,49 @@ public class DownloadJob : IJob
 
             downloadTask = result.Value;
 
-            var machineId = await _dbContext.GetPlexServerMachineIdentifierById(downloadTask.PlexServerId, token);
-            var clientType = _serverSettingsModule.GetAllowStreamDownloader(machineId)
-                ? PlexDownloadClientType.Dash
-                : PlexDownloadClientType.Direct;
+            var deliveryResult = await _commandExecutor.Send(
+                new GetTranscodeUrlCommand
+                {
+                    DownloadTaskKey = downloadTask.ToKey(),
+                    MetaDataPath = $"/library/metadata/{downloadTask.PlexApiRatingKey}",
+                },
+                token
+            );
+
+            if (deliveryResult.IsFailed)
+            {
+                await _downloadTaskUpdateDispatcher.OnStatusChangedAsync(
+                    downloadTask.ToKey(),
+                    DownloadStatus.SourceUnavailable,
+                    deliveryResult.ToResult(),
+                    CancellationToken.None
+                );
+                await _eventPublisher.PublishAsync(new SendNotificationResult(deliveryResult.ToResult()), token);
+                return;
+            }
+
+            var clientType =
+                deliveryResult.Value.Method == DeliveryMethod.DirectFile
+                    ? PlexDownloadClientType.Direct
+                    : PlexDownloadClientType.Dash;
             _log.Here()
                 .Information(
-                    "Creating {ClientType} download client for {DownloadTaskFullTitle}",
+                    "Creating {ClientType} download client for {DownloadTaskFullTitle} with {DeliveryMethod} {QualityTier}",
                     clientType,
-                    downloadTask.FullTitle
+                    downloadTask.FullTitle,
+                    deliveryResult.Value.Method,
+                    deliveryResult.Value.QualityTier
                 );
 
             await using var plexDownloadClient = _plexDownloadClientFactory[clientType];
 
-            var startResult = await plexDownloadClient.Start(downloadTask.ToKey(), token);
+            var source = new PlexDownloadSource
+            {
+                DownloadUrl = deliveryResult.Value.DownloadUrl,
+                Quality = deliveryResult.Value.TranscodedQuality,
+            };
+
+            var startResult = await plexDownloadClient.Start(downloadTask.ToKey(), token, source);
 
             if (startResult.IsCancelled)
             {

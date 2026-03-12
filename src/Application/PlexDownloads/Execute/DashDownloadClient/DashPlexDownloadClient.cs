@@ -58,7 +58,11 @@ public class DashPlexDownloadClient : IPlexDownloadClient
         _dbContext = dbContextFactory.Create();
     }
 
-    public async Task<Result> Start(DownloadTaskKey downloadTaskKey, CancellationToken cancellationToken = default)
+    public async Task<Result> Start(
+        DownloadTaskKey downloadTaskKey,
+        CancellationToken cancellationToken = default,
+        PlexDownloadSource? source = null
+    )
     {
         _downloadTaskKey = downloadTaskKey;
 
@@ -70,29 +74,48 @@ public class DashPlexDownloadClient : IPlexDownloadClient
                 .LogWarning();
         }
 
-        // Get transcoding download url
-        var downloadUrlResult = await _commandExecutor.Send(
-            new GetTranscodeUrlCommand
+        if (source is null)
+        {
+            var downloadUrlResult = await _commandExecutor.Send(
+                new GetTranscodeUrlCommand
+                {
+                    DownloadTaskKey = downloadTaskKey,
+                    MetaDataPath = $"/library/metadata/{downloadTask.PlexApiRatingKey}",
+                },
+                cancellationToken
+            );
+
+            if (downloadUrlResult.IsCancelled)
             {
-                DownloadTaskKey = downloadTaskKey,
-                MetaDataPath = $"/library/metadata/{downloadTask.PlexApiRatingKey}",
-            },
-            cancellationToken
-        );
+                await SetDownloadStatusAsync(DownloadStatus.Stopped, downloadUrlResult.ToResult());
+                return downloadUrlResult.ToResult();
+            }
 
-        if (downloadUrlResult.IsCancelled)
-        {
-            await SetDownloadStatusAsync(DownloadStatus.Stopped, downloadUrlResult.ToResult());
-            return downloadUrlResult.ToResult();
-        }
+            if (downloadUrlResult.IsFailed)
+            {
+                var status = IsServerUnreachableError(downloadUrlResult.ToResult())
+                    ? DownloadStatus.ServerUnreachable
+                    : DownloadStatus.SourceUnavailable;
+                await SetDownloadStatusAsync(status, downloadUrlResult.ToResult());
+                return downloadUrlResult.ToResult().LogError();
+            }
 
-        if (downloadUrlResult.IsFailed)
-        {
-            var status = IsServerUnreachableError(downloadUrlResult.ToResult())
-                ? DownloadStatus.ServerUnreachable
-                : DownloadStatus.SourceUnavailable;
-            await SetDownloadStatusAsync(status, downloadUrlResult.ToResult());
-            return downloadUrlResult.ToResult().LogError();
+            if (downloadUrlResult.Value.Method != DeliveryMethod.UniversalDash)
+            {
+                var invalidMethodResult = Result
+                    .Fail(
+                        $"Expected universal DASH delivery for dash downloader but received {downloadUrlResult.Value.Method}."
+                    )
+                    .LogError();
+                await SetDownloadStatusAsync(DownloadStatus.SourceUnavailable, invalidMethodResult);
+                return invalidMethodResult;
+            }
+
+            source = new PlexDownloadSource
+            {
+                DownloadUrl = downloadUrlResult.Value.DownloadUrl,
+                Quality = downloadUrlResult.Value.TranscodedQuality,
+            };
         }
 
         // Create working directory
@@ -103,7 +126,7 @@ public class DashPlexDownloadClient : IPlexDownloadClient
             return createDirectoryResult.ToResult();
         }
 
-        var outputQuality = downloadUrlResult.Value.TranscodedQuality;
+        var outputQuality = source.Quality;
         var normalizedFileName = DashOutputFileNameCleaner.NormalizeForDashOutput(downloadTask.FileName, outputQuality);
         if (!string.Equals(downloadTask.FileName, normalizedFileName, StringComparison.Ordinal))
         {
@@ -120,7 +143,7 @@ public class DashPlexDownloadClient : IPlexDownloadClient
 
         // Execute dash stream download
         await SetDownloadStatusAsync(DownloadStatus.Downloading);
-        var options = await CreateDashOptions(downloadTask, downloadUrlResult.Value.DownloadUrl, cancellationToken);
+        var options = await CreateDashOptions(downloadTask, source.DownloadUrl, cancellationToken);
         await using var cancellationRegistration = cancellationToken.Register(() =>
         {
             _ = _dashWrapper.StopAsync();

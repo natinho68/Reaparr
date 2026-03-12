@@ -41,6 +41,8 @@ public class DashPlexDownloadClientStopAsyncUnitTests : BaseUnitTest<DashPlexDow
                     new GetTranscodeUrlResult
                     {
                         DownloadUrl = "https://plex.example/start.mpd",
+                        Method = DeliveryMethod.UniversalDash,
+                        QualityTier = DeliveryQualityTier.NearExact,
                         TranscodedQuality = VideoQuality.SD,
                     }
                 )
